@@ -33,34 +33,38 @@ This lab demonstrates how to implement a hub-spoke network topology in Azure whe
 
 ## Architecture
 
-```
-                         ┌─────────────────────┐
-                         │    vnet-spoke-app   │
-                         │   10.10.0.0/16      │
-                         │  ┌───────────────┐  │
-                         │  │ snet-app-web  │  │
-                         │  │ 10.10.1.0/24  │  │
-                         │  └───────────────┘  │
-                         │  ┌───────────────┐  │
-                         │  │snet-app-backend│ │
-                         │  │ 10.10.2.0/24  │  │
-                         │  └───────────────┘  │
-                         └──────────┬──────────┘
-                                    │ peering
-                                    ▼
-┌─────────────────────┐    ┌─────────────────────┐
-│   vnet-onprem       │    │     vnet-hub        │
-│   10.30.0.0/16      │◄──►│   10.0.0.0/16       │
-│  ┌───────────────┐  │peer│  ┌───────────────┐  │
-│  │snet-onprem-lan│  │ing │  │ snet-hub-shared│ │
-│  │ 10.30.1.0/24  │  │    │  │ 10.0.1.0/24   │  │
-│  └───────────────┘  │    │  └───────────────┘  │
-│  ┌───────────────┐  │    │  ┌───────────────┐  │
-│  │snet-onprem-lan2│ │    │  │AzureFirewall  │  │
-│  │ 10.40.1.0/24  │  │    │  │   Subnet      │  │
-│  └───────────────┘  │    │  │ 10.0.3.0/26   │  │
-└─────────────────────┘    │  └───────────────┘  │
-                           └─────────────────────┘
+
+
+## Architecture
+
+```text
+                           +----------------------------------------+
+                           |        vnet-spoke-app (10.10.0.0/16)   |
+                           |----------------------------------------|
+                           |  +----------------------------------+  |
+                           |  | snet-app-web (10.10.1.0/24)      |  |
+                           |  +----------------------------------+  |
+                           |                                      |
+                           |  +----------------------------------+  |
+                           |  | snet-app-backend (10.10.2.0/24)  |  |
+                           |  +----------------------------------+  |
+                           +------------------------▲---------------+
+                                                    ||
+                                                    || vNet Peering
+                                                    ||
++----------------------------------------+          ||        +----------------------------------------+
+|        vnet-onprem (10.30.0.0/16)      |          ||        |        vnet-hub (10.0.0.0/16)          |
+|----------------------------------------|          ||        |----------------------------------------|
+|  +----------------------------------+  |==========||========|  +----------------------------------+  |
+|  | snet-onprem-lan (10.30.1.0/24)  |  |  vNet Peering       |  | snet-hub-shared (10.0.1.0/24)   |  |
+|  +----------------------------------+  |                   |  +----------------------------------+  |
+|                                        |                   |                                        |
+|  +----------------------------------+  |                   |  +----------------------------------+  |
+|  | snet-onprem-lan2 (10.40.1.0/24) |  |                   |  | AzureFirewallSubnet (10.0.3.0/26)|  |
+|  +----------------------------------+  |                   |  |        [ Azure Firewall ]        |  |
++----------------------------------------+                   |  +----------------------------------+  |
+                                                            +----------------------------------------+
+
 ```
 
 ### Traffic Flow
@@ -167,13 +171,15 @@ az network vnet create \
   --subnet-prefix 10.30.1.0/24
 ```
 
-![Virtual Networks Overview](./assets/01-vnet-overview.png)
+
 
 ---
 
 ### Step 2: Configure VNet Peering
 
 #### 2.1 Create Peering: Hub ↔ Spoke-App
+
+
 
 ```bash
 # Hub to Spoke-App
@@ -219,6 +225,12 @@ az network vnet peering create \
 
 #### 2.3 Verify Peering Settings
 
+## Peering Configuration Details
+
+![Peering Config](assets/peeringconfig.JPG)
+
+
+
 Ensure both peerings have these settings enabled:
 
 | Setting | Value |
@@ -227,13 +239,36 @@ Ensure both peerings have these settings enabled:
 | Allow forwarded traffic | ✅ Enabled |
 | Peering state | Connected |
 
-![Peering Configuration](./assets/02-peering-config.png)
+
+
+
+> ⚠️ **Critical**: You must enable **"Allow forwarded traffic"** on both sides of each peering connection. Without this setting, traffic routed through the Azure Firewall will be dropped, and spoke-to-spoke communication will fail. This is the most common misconfiguration in hub-spoke architectures.
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ---
 
 ### Step 3: Deploy Azure Firewall
 
-#### 3.1 Create Firewall Policy
+
+
+
+![Firewall Summary](assets/fw-summary.JPG)
+
+
+
+
 
 ```bash
 az network firewall policy create \
@@ -241,6 +276,10 @@ az network firewall policy create \
   --name fw-policy-hub \
   --location eastus2
 ```
+
+
+
+
 
 #### 3.2 Create Public IP for Firewall
 
@@ -251,6 +290,10 @@ az network public-ip create \
   --sku Standard \
   --allocation-method Static
 ```
+
+
+
+![Firewall Policy](assets/fw-policy.JPG)
 
 #### 3.3 Deploy Azure Firewall
 
@@ -280,7 +323,7 @@ az network firewall show \
 
 > 📝 **Note**: Save this IP (e.g., `10.0.3.4`). You'll need it for route tables.
 
-![Azure Firewall Overview](./assets/03-firewall-overview.png)
+
 
 ---
 
@@ -308,6 +351,12 @@ az network route-table route create \
   --next-hop-type VirtualAppliance \
   --next-hop-ip-address 10.0.3.4
 ```
+
+## Route Tables
+
+
+
+
 
 Route traffic from OnPrem to Spoke-App through Firewall:
 
@@ -353,6 +402,13 @@ az network vnet subnet update \
   --route-table /subscriptions/<subscription-id>/resourceGroups/rg-hub-network/providers/Microsoft.Network/routeTables/rt-spoke-to-spoke
 ```
 
+
+
+> ⚠️ **Critical**: Route tables must be **associated with the correct subnets** in each spoke VNet. Creating routes alone is not enough—you must go to the Route Table → Subnets → Associate and attach it to each subnet that needs to route traffic through the firewall. If the association is missing, traffic will use default Azure routing and bypass the firewall.
+
+
+
+
 #### 4.4 Verify Route Configuration
 
 | Route Name | Address Prefix | Next Hop Type | Next Hop IP |
@@ -361,7 +417,6 @@ az network vnet subnet update \
 | to-spoke-app-web | 10.10.1.0/24 | VirtualAppliance | 10.0.3.4 |
 | to-spoke-app-backend | 10.10.2.0/24 | VirtualAppliance | 10.0.3.4 |
 
-![Route Table Configuration](./assets/04-route-table.png)
 
 ---
 
@@ -385,7 +440,7 @@ az network vnet subnet update \
 |------|--------|-------------|----------|------|
 | allow-spoke-to-spoke | 10.10.1.0/24,10.10.2.0/24,10.30.1.0/24 | 10.10.1.0/24,10.10.2.0/24,10.30.1.0/24 | Any | * |
 
-![Firewall Network Rule](./assets/05-firewall-rule.png)
+
 
 ---
 
@@ -448,7 +503,7 @@ PING 10.30.1.4 (10.30.1.4) 56(84) bytes of data.
 
 > 📝 **Note**: TTL=63 indicates traffic passed through the firewall (TTL decremented by 1)
 
-![Ping Success](./assets/06-ping-success.png)
+![Ping Sucess #2](assets/pingsuccess.JPG)
 
 ### Verify Traffic Flow
 
@@ -620,14 +675,7 @@ az group delete --name rg-onprem-sim --yes --no-wait
 
 ---
 
-## Next Steps
 
-- [ ] **Lab 2**: Site-to-Site VPN with IPsec
-- [ ] **Lab 3**: Private Endpoints for PaaS Services
-- [ ] **Lab 4**: Application Gateway with WAF
-- [ ] **Lab 5**: Azure Virtual WAN
-
----
 
 ## References
 
@@ -642,6 +690,3 @@ az group delete --name rg-onprem-sim --yes --no-wait
 
 This lab guide is provided for educational purposes.
 
-## Author
-
-Created as a hands-on Azure networking lab exercise.
